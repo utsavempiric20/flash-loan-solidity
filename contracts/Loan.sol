@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import "hardhat/console.sol";
+
 interface IAuthentication {
     function getUserLoggedIn(address caller) external view returns (bool);
 }
@@ -12,18 +14,14 @@ contract Loan {
 
     struct Lender {
         address lenderAddress;
-        address borrowerAddress;
         uint256 lendingAmount;
         uint256 lendingPercentage;
-        uint256 lendingTimeDuration;
+        uint256 remainingAmount;
     }
 
     struct Borrower {
-        address lenderAddress;
         address borrowerAddress;
         uint256 borrowingAmount;
-        uint256 borrowingPercentage;
-        uint256 borrowingTimeDuration;
     }
 
     struct CurrentTransaction {
@@ -32,11 +30,10 @@ contract Loan {
         uint256 lendingPercentage;
         address borrowerAddress;
         uint256 borrowingAmount;
-        uint256 borrowingPercentage;
     }
 
     uint8 poolFee = 2;
-    uint256 minimumEth = 10;
+    uint256 minimumEth = 5;
     mapping(address => Lender) lenderDetails;
     mapping(address => address[]) borrowersOfLenders;
     address[] allLenders;
@@ -46,6 +43,7 @@ contract Loan {
     address[] allBorrowers;
 
     mapping(address => mapping(address => CurrentTransaction)) currentTransactions;
+    mapping(address => mapping(address => CurrentTransaction)) tempTransactions;
 
     address payable owner;
 
@@ -78,28 +76,28 @@ contract Loan {
         _;
     }
 
-    constructor(address _iAuthentication) {
+    constructor() /*address _iAuthentication*/
+    {
         owner = payable(msg.sender);
-        iAuthentication = IAuthentication(_iAuthentication);
+        // iAuthentication = IAuthentication(_iAuthentication);
     }
 
     function lendingLoan(
         uint256 _lendingAmount,
-        uint256 _lendingPercentage,
-        uint256 _lendingTimeDuration
-    ) public payable userMustLoggedIn {
+        uint256 _lendingPercentage // payable
+    ) public // userMustLoggedIn
+    {
         require(_lendingAmount >= minimumEth, "Lending Amount must be 10 Eth.");
-        require(msg.value >= minimumEth, "You have to lend minimum 10 Eth.");
-        require(
-            msg.value == (_lendingAmount * 1 ether),
-            "Amount must be equal to LendingAmount."
-        );
+        // require(msg.value >= minimumEth, "You have to lend minimum 10 Eth.");
+        // require(
+        //     msg.value == (_lendingAmount * 1 ether),
+        //     "Amount must be equal to LendingAmount."
+        // );
         Lender memory lender = Lender({
             lenderAddress: msg.sender,
-            borrowerAddress: address(0),
             lendingAmount: _lendingAmount,
             lendingPercentage: _lendingPercentage,
-            lendingTimeDuration: _lendingTimeDuration
+            remainingAmount: 0
         });
         lenderDetails[msg.sender] = lender;
         allLenders.push(msg.sender);
@@ -108,56 +106,104 @@ contract Loan {
             lendingAmount: _lendingAmount,
             lendingPercentage: _lendingPercentage,
             borrowerAddress: address(0),
-            borrowingAmount: 0,
-            borrowingPercentage: 0
+            borrowingAmount: 0
         });
         currentTransactions[msg.sender][address(this)] = currentTransaction;
     }
 
     function borrowingLoan(
-        uint256 _borrowingAmount,
-        uint256 _borrowingPercentage,
-        uint256 _borrowingTimeDuration
-    ) public payable userMustLoggedIn {
+        uint256 _borrowingAmount /*userMustLoggedIn*/
+    ) public {
         require(
             _borrowingAmount >= minimumEth,
             "Borrowing Amount must be 10 Eth."
         );
-        require(
-            address(this).balance >= _borrowingAmount,
-            "Bank has Insufficiant balance."
-        );
+        // require(
+        //     address(this).balance >= _borrowingAmount,
+        //     "Bank has Insufficiant balance."
+        // );
         Borrower memory borrower = Borrower({
             borrowerAddress: msg.sender,
-            lenderAddress: address(0),
-            borrowingAmount: _borrowingAmount,
-            borrowingPercentage: _borrowingPercentage,
-            borrowingTimeDuration: _borrowingTimeDuration
+            borrowingAmount: _borrowingAmount
         });
         borrowerDetails[msg.sender] = borrower;
         allBorrowers.push(msg.sender);
-        CurrentTransaction storage currentTransaction = currentTransactions[
-            msg.sender
-        ][address(this)];
-        currentTransaction.borrowerAddress = msg.sender;
-        currentTransaction.borrowingAmount = _borrowingAmount;
-        currentTransaction.borrowingPercentage = _borrowingPercentage;
 
-        borrowersOfLenders[currentTransaction.lenderAddress].push(msg.sender);
-        lendersOfBorrowers[msg.sender].push(currentTransaction.lenderAddress);
-
-        (bool success, ) = payable(msg.sender).call{
-            value: _borrowingAmount * 1 ether
-        }("");
-        if (!success) {
-            revert Loan__TransferFailed();
+        uint256 lenderLength = allLenders.length;
+        for (uint256 i = 0; i < lenderLength; i++) {
+            for (uint256 j = 0; j < lenderLength - i - 1; j++) {
+                if (
+                    currentTransactions[allLenders[j]][address(this)]
+                        .lendingPercentage >=
+                    currentTransactions[allLenders[j + 1]][address(this)]
+                        .lendingPercentage
+                ) {
+                    tempTransactions[allLenders[j]][
+                        address(this)
+                    ] = currentTransactions[allLenders[j]][address(this)];
+                    currentTransactions[allLenders[j]][
+                        address(this)
+                    ] = currentTransactions[allLenders[j + 1]][address(this)];
+                    currentTransactions[allLenders[j + 1]][
+                        address(this)
+                    ] = tempTransactions[allLenders[j]][address(this)];
+                }
+            }
         }
+
+        // address lenderAddress;
+        CurrentTransaction storage currentTransaction;
+        uint256 remainingAmount = 0;
+        uint256 multipleRemainAmount = _borrowingAmount;
+        for (uint256 i = 0; i < allLenders.length; i++) {
+            Lender storage lender = lenderDetails[allLenders[i]];
+            currentTransaction = currentTransactions[allLenders[i]][
+                address(this)
+            ];
+            currentTransaction.borrowerAddress = msg.sender;
+            if (
+                currentTransactions[allLenders[i]][address(this)]
+                    .lendingAmount >= multipleRemainAmount
+            ) {
+                remainingAmount =
+                    currentTransactions[allLenders[i]][address(this)]
+                        .lendingAmount -
+                    multipleRemainAmount;
+
+                currentTransaction.borrowingAmount =
+                    remainingAmount +
+                    currentTransactions[allLenders[i]][address(this)]
+                        .lendingAmount;
+                lender.remainingAmount = remainingAmount;
+                console.log(remainingAmount);
+                break;
+            } else {
+                multipleRemainAmount =
+                    multipleRemainAmount -
+                    currentTransactions[allLenders[i]][address(this)]
+                        .lendingAmount;
+                currentTransaction.borrowingAmount = currentTransactions[
+                    allLenders[i]
+                ][address(this)].lendingAmount;
+            }
+        }
+
+        // CurrentTransaction storage currentTransaction = currentTransactions[
+        //     lenderAddress
+        // ][address(this)];
+        // currentTransaction.borrowerAddress = msg.sender;
+        // currentTransaction.borrowingAmount = _borrowingAmount;
+
+        // borrowersOfLenders[lenderAddress].push(msg.sender);
+        // lendersOfBorrowers[msg.sender].push(lenderAddress);
+
+        // (bool success, ) = payable(msg.sender).call{
+        //     value: _borrowingAmount * 1 ether
+        // }("");
+        // if (!success) {
+        //     revert Loan__TransferFailed();
+        // }
     }
-
-    // function borrowrPayLoan() public userMustLoggedIn{
-    //     require(msg.sender == borrowerDetails[msg.sender].borrowerAddress,"Invalid Borrower.");
-
-    // }
 
     function getAllLendersNBorrowers(
         bool lenderOrborrower
@@ -178,6 +224,14 @@ contract Loan {
         return borrowerDetails[msg.sender];
     }
 
+    function getLendersOfBorrowers() public view returns (address[] memory) {
+        return lendersOfBorrowers[msg.sender];
+    }
+
+    function getBorrowersOfLenders() public view returns (address[] memory) {
+        return borrowersOfLenders[msg.sender];
+    }
+
     function getCurrentTransaction()
         public
         view
@@ -186,8 +240,7 @@ contract Loan {
             uint256 lendingAmount,
             uint256 lendingPercentage,
             address borrowerAddress,
-            uint256 borrowingAmount,
-            uint256 borrowingPercentage
+            uint256 borrowingAmount
         )
     {
         CurrentTransaction memory currentTransaction = currentTransactions[
@@ -198,8 +251,7 @@ contract Loan {
             currentTransaction.lendingAmount,
             currentTransaction.lendingPercentage,
             currentTransaction.borrowerAddress,
-            currentTransaction.borrowingAmount,
-            currentTransaction.borrowingPercentage
+            currentTransaction.borrowingAmount
         );
     }
 }
